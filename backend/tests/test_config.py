@@ -12,6 +12,10 @@ def test_settings_default_values():
     assert settings.db_max_overflow >= 0
 
 
+from sqlalchemy.engine.url import make_url
+from sqlalchemy.dialects.postgresql.asyncpg import PGDialect_asyncpg
+
+
 def test_settings_url_translation():
     s1 = Settings(database_url="postgresql://user:pass@localhost:5432/testdb")
     assert s1.async_database_url == "postgresql+asyncpg://user:pass@localhost:5432/testdb"
@@ -21,6 +25,71 @@ def test_settings_url_translation():
 
     s3 = Settings(database_url="sqlite+aiosqlite:///./test.db")
     assert s3.async_database_url == "sqlite+aiosqlite:///./test.db"
+
+
+def test_neon_database_url_normalization_with_sslmode_and_channel_binding():
+    """
+    Verifies that Neon connection strings with libpq query parameters (sslmode=require, channel_binding=require)
+    are properly normalized for asyncpg:
+    - Prefix converted to postgresql+asyncpg://
+    - Credentials (username, password), host, port, and database name preserved
+    - sslmode converted to ssl=require
+    - channel_binding removed
+    - Dialect connect_args contain valid asyncpg parameters without unexpected keyword arguments
+    """
+    raw_neon = "postgresql://neon_admin:Secr%40tP%23ss123@ep-cool-fog-123456.us-east-2.aws.neon.tech:5432/neondb?sslmode=require&channel_binding=require"
+    s = Settings(database_url=raw_neon)
+    async_url = s.async_database_url
+
+    assert async_url.startswith("postgresql+asyncpg://")
+    assert "sslmode" not in async_url
+    assert "channel_binding" not in async_url
+    assert "ssl=require" in async_url
+
+    url_obj = make_url(async_url)
+    cargs, cparams = PGDialect_asyncpg().create_connect_args(url_obj)
+
+    assert cparams["host"] == "ep-cool-fog-123456.us-east-2.aws.neon.tech"
+    assert cparams["port"] == 5432
+    assert cparams["user"] == "neon_admin"
+    assert cparams["password"] == "Secr@tP#ss123"
+    assert cparams["database"] == "neondb"
+    assert cparams["ssl"] == "require"
+    assert "sslmode" not in cparams
+    assert "channel_binding" not in cparams
+
+
+def test_neon_database_url_postgres_prefix_and_auto_ssl():
+    """
+    Verifies that Neon URLs starting with 'postgres://' without query parameters
+    still have TLS required automatically.
+    """
+    raw_neon = "postgres://neon_user:demo_pass@ep-cool-fog-123456.us-east-2.aws.neon.tech/neondb"
+    s = Settings(database_url=raw_neon)
+    async_url = s.async_database_url
+
+    assert async_url.startswith("postgresql+asyncpg://")
+    url_obj = make_url(async_url)
+    cargs, cparams = PGDialect_asyncpg().create_connect_args(url_obj)
+
+    assert cparams["host"] == "ep-cool-fog-123456.us-east-2.aws.neon.tech"
+    assert cparams["database"] == "neondb"
+    assert cparams["ssl"] == "require"
+
+
+def test_neon_database_url_verify_full():
+    """Verifies that explicit sslmode=verify-full is preserved as ssl=verify-full."""
+    raw = "postgresql://neon_user:pass@ep-cool-fog-123456.us-east-2.aws.neon.tech:5432/neondb?sslmode=verify-full&channel_binding=require"
+    s = Settings(database_url=raw)
+    async_url = s.async_database_url
+
+    url_obj = make_url(async_url)
+    cargs, cparams = PGDialect_asyncpg().create_connect_args(url_obj)
+
+    assert cparams["ssl"] == "verify-full"
+    assert "sslmode" not in cparams
+    assert "channel_binding" not in cparams
+
 
 
 def test_cors_origins_parsing():

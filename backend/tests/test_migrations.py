@@ -70,3 +70,35 @@ def test_isolated_migration_upgrade_and_downgrade():
     finally:
         if os.path.exists(tmp_db_path):
             os.remove(tmp_db_path)
+
+
+def test_alembic_migration_url_normalizes_neon_connection(monkeypatch):
+    """
+    Verifies that Neon connection strings provided for migrations
+    are properly normalized for asyncpg without unsupported libpq query parameters.
+    """
+    from app.core.config import Settings, normalize_database_url
+    from sqlalchemy.engine.url import make_url
+    from sqlalchemy.dialects.postgresql.asyncpg import PGDialect_asyncpg
+
+    neon_url = "postgresql://alex:AbC123dEf@ep-cool-fog-123456.us-east-2.aws.neon.tech:5432/neondb?sslmode=require&channel_binding=require"
+    monkeypatch.setenv("DATABASE_URL", neon_url)
+
+    custom_settings = Settings(database_url=neon_url)
+    resolved = custom_settings.async_database_url
+    assert resolved.startswith("postgresql+asyncpg://")
+    assert "sslmode" not in resolved
+    assert "channel_binding" not in resolved
+    assert "ssl=require" in resolved
+
+    # Verify normalize_database_url directly matches
+    assert normalize_database_url(neon_url) == resolved
+
+    url_obj = make_url(resolved)
+    cargs, cparams = PGDialect_asyncpg().create_connect_args(url_obj)
+    assert cparams["host"] == "ep-cool-fog-123456.us-east-2.aws.neon.tech"
+    assert cparams["database"] == "neondb"
+    assert cparams["ssl"] == "require"
+    assert "sslmode" not in cparams
+    assert "channel_binding" not in cparams
+

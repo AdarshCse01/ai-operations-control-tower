@@ -12,7 +12,7 @@ from alembic import context
 # Ensure backend root is on sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from app.core.config import settings
+from app.core.config import normalize_database_url, settings
 from app.models import Base
 
 # this is the Alembic Config object, which provides
@@ -32,9 +32,22 @@ def get_sync_url(url: str) -> str:
     return url.replace("+asyncpg", "").replace("+aiosqlite", "")
 
 
+def get_migration_url() -> str:
+    """
+    Resolves and normalizes database URL for Alembic migrations.
+    Respects explicit configuration overrides (e.g. isolated test databases),
+    falling back to settings.async_database_url (which incorporates environment DATABASE_URL).
+    Ensures URL uses async driver and normalizes unsupported libpq query parameters.
+    """
+    ini_url = config.get_main_option("sqlalchemy.url")
+    if ini_url and ini_url != "postgresql+asyncpg://postgres:postgres@localhost:5432/ops_control":
+        return normalize_database_url(ini_url)
+    return settings.async_database_url
+
+
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
-    url = config.get_main_option("sqlalchemy.url") or settings.async_database_url
+    url = get_migration_url()
     sync_url = get_sync_url(url)
 
     context.configure(
@@ -62,13 +75,7 @@ def do_run_migrations(connection: Connection) -> None:
 
 async def run_async_migrations() -> None:
     """Run migrations in 'online' mode using async engine."""
-    url = config.get_main_option("sqlalchemy.url") or settings.async_database_url
-    if url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    elif url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql+asyncpg://", 1)
-    elif url.startswith("sqlite:///") and not url.startswith("sqlite+aiosqlite:///"):
-        url = url.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
+    url = get_migration_url()
 
     section = config.get_section(config.config_ini_section, {})
     section["sqlalchemy.url"] = url

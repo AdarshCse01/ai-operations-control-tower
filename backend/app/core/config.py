@@ -2,6 +2,70 @@ import json
 from typing import Union
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine.url import make_url
+
+
+def normalize_database_url(raw_url: str) -> str:
+    """
+    Normalizes a database connection URL for SQLAlchemy async drivers (asyncpg/aiosqlite).
+    - Translates 'postgresql://' and 'postgres://' prefixes to 'postgresql+asyncpg://'.
+    - Translates 'sqlite:///' to 'sqlite+aiosqlite:///'.
+    - Converts unsupported libpq query parameters (e.g. 'sslmode=require') to asyncpg's 'ssl=require'.
+    - Strips unsupported libpq query parameters like 'channel_binding' and 'gssencmode'.
+    - Preserves authentication credentials, host, port, database path, and TLS security requirements.
+    """
+    if not raw_url:
+        return raw_url
+
+    try:
+        url_obj = make_url(raw_url)
+    except Exception:
+        # Fallback basic translation if make_url cannot parse the input string
+        url = raw_url
+        if url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif url.startswith("sqlite:///") and not url.startswith("sqlite+aiosqlite:///"):
+            url = url.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
+        return url
+
+    driver = url_obj.drivername
+    if driver in ("postgresql", "postgres"):
+        url_obj = url_obj.set(drivername="postgresql+asyncpg")
+    elif driver == "sqlite":
+        url_obj = url_obj.set(drivername="sqlite+aiosqlite")
+
+    if "asyncpg" in url_obj.drivername:
+        query = dict(url_obj.query)
+
+        # Convert libpq sslmode to asyncpg ssl parameter
+        if "sslmode" in query:
+            mode = query.pop("sslmode")
+            if isinstance(mode, (list, tuple)):
+                mode = mode[0] if mode else "require"
+            if "ssl" not in query:
+                mode_lower = mode.lower() if isinstance(mode, str) else str(mode).lower()
+                if mode_lower in ("require", "verify-ca", "verify-full", "prefer", "allow", "disable"):
+                    query["ssl"] = mode_lower
+                elif mode_lower in ("true", "1"):
+                    query["ssl"] = "require"
+                elif mode_lower in ("false", "0"):
+                    query["ssl"] = "disable"
+                else:
+                    query["ssl"] = mode
+
+        # If Neon host is detected and ssl was not explicitly set, ensure TLS is enabled
+        if "neon.tech" in (url_obj.host or "") and "ssl" not in query:
+            query["ssl"] = "require"
+
+        # Remove unsupported libpq query parameters that asyncpg.connect rejects
+        query.pop("channel_binding", None)
+        query.pop("gssencmode", None)
+
+        url_obj = url_obj.set(query=query)
+
+    return url_obj.render_as_string(hide_password=False)
 
 
 class Settings(BaseSettings):
@@ -59,14 +123,10 @@ class Settings(BaseSettings):
     def async_database_url(self) -> str:
         """
         Ensures the database connection URL is formatted for an async dialect.
-        Translates 'postgresql://' to 'postgresql+asyncpg://' if needed.
+        Translates 'postgresql://' to 'postgresql+asyncpg://' if needed,
+        and sanitizes libpq parameters (e.g. sslmode, channel_binding) for asyncpg.
         """
-        url = self.database_url
-        if url.startswith("postgresql://"):
-            return url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        if url.startswith("postgres://"):
-            return url.replace("postgres://", "postgresql+asyncpg://", 1)
-        return url
+        return normalize_database_url(self.database_url)
 
     @field_validator("cors_origins", mode="after")
     @classmethod

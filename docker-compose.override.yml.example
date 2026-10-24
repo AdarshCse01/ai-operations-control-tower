@@ -1,0 +1,19 @@
+# ==============================================================================
+# AI Operations Control Tower - Development Override Template (OPT-IN ONLY)
+# ==============================================================================
+# To enable host port access for local development / administrative database tools:
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#
+# SECURITY NOTICE:
+# - Ports are strictly bound to 127.0.0.1 (IPv4 loopback) to prevent accidental
+#   exposure to external or public network interfaces.
+# - DO NOT deploy or commit this file in staging or production environments.
+# ==============================================================================
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"

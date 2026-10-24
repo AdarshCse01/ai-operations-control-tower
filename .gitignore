@@ -1,0 +1,47 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.pytest_cache/
+.ruff_cache/
+node_modules/
+dist/
+coverage/
+*.db
+
+# Environment variants — keep real environment files private
+.env.*
+!.env.example
+
+# SQLite databases and sidecar files
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+*.sqlite-shm
+*.sqlite-wal
+
+# TypeScript build caches
+*.tsbuildinfo
+
+# Local Docker overrides
+docker-compose.override.yml
+
+# Operating system and IDE files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Python virtual environments and coverage
+venv/
+env/
+.coverage
+htmlcov/
+*.log
+
+# Internal audit artifacts and Phase 7 staging reports
+artifacts/
+phase7_*.md

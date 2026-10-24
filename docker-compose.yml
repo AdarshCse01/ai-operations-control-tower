@@ -1,0 +1,71 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD environment variable must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-ops_control}
+    volumes: [ops_pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ops} -d ${POSTGRES_DB:-ops_control}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  migration:
+    build: ./backend
+    command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+    environment:
+      APP_ENV: ${APP_ENV:-staging}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL environment variable must be set in .env}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY environment variable must be set in .env}
+      ALLOW_SQLITE_FALLBACK: "false"
+      ENABLE_DEMO_LOGINS: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    build: ./backend
+    environment:
+      APP_ENV: ${APP_ENV:-staging}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL environment variable must be set in .env}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY environment variable must be set in .env}
+      ALLOW_SQLITE_FALLBACK: "false"
+      ENABLE_DEMO_LOGINS: "false"
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+    ports: ["8000:8000"]
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000/api/v1}
+      VITE_ENABLE_DEMO_LOGINS: "false"
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports: ["5173:5173"]
+    restart: unless-stopped
+
+volumes:
+  ops_pgdata:
